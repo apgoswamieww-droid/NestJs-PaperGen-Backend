@@ -150,6 +150,7 @@ export function validateEnv(
   validateInt(config, 'REFRESH_TTL_REMEMBER_DAYS', { min: 1, max: 365 });
   validateInt(config, 'AUTH_LOCKOUT_ATTEMPTS', { min: 1, max: 100 });
   validateInt(config, 'AUTH_LOCKOUT_MINUTES', { min: 1, max: 1440 });
+  validateInt(config, 'PASSWORD_MAX_AGE_DAYS', { min: 1, max: 3650 });
   validateInt(config, 'SMTP_PORT', { min: 1, max: 65535 });
   validateInt(config, 'PASSWORD_RESET_TTL_MINUTES', { min: 5, max: 1440 });
   validateInt(config, 'INVITE_TTL_HOURS', { min: 1, max: 720 });

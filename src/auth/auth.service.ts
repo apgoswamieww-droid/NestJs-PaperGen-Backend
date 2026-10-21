@@ -22,10 +22,14 @@ import type {
   SessionUser,
 } from './auth.types.js';
 import { ForgotPasswordDto } from './dto/forgot-password.dto.js';
+import { ChangePasswordDto } from './dto/change-password.dto.js';
 import { LoginDto } from './dto/login.dto.js';
 import { ResetPasswordDto } from './dto/reset-password.dto.js';
+import { isPasswordExpired } from './password-expiry.js';
 import { PasswordResetService } from './password-reset.service.js';
 import { PasswordService } from './password.service.js';
+import type { Permission } from './permissions.js';
+import { RolePermissionsService } from './role-permissions.service.js';
 import { TokensService, type RefreshIssue } from './tokens.service.js';
 
 const LOCKED_STATUS = 423;
@@ -45,6 +49,7 @@ export class AuthService {
     private readonly passwordService: PasswordService,
     private readonly tokensService: TokensService,
     private readonly passwordResetService: PasswordResetService,
+    private readonly rolePermissions: RolePermissionsService,
     private readonly mailService: MailService,
     @InjectModel(User.name) private readonly userModel: Model<User>,
     @InjectModel(Tenant.name) private readonly tenantModel: Model<Tenant>,
@@ -106,6 +111,10 @@ export class AuthService {
     }
 
     const tenant = await this.tenantModel.findById(user.tenantId).exec();
+    const permissions = await this.rolePermissions.permissionsForRole(
+      user.tenantId,
+      user.role,
+    );
     const accessToken = await this.tokensService.issueAccessToken(
       {
         id: user._id.toString(),
@@ -116,7 +125,15 @@ export class AuthService {
     );
 
     return {
-      session: { accessToken, user: toSessionUser(user, tenant) },
+      session: {
+        accessToken,
+        user: toSessionUser(
+          user,
+          tenant,
+          permissions,
+          this.isPasswordExpired(user),
+        ),
+      },
       refresh: { token: rotated.token, expiresAt: rotated.expiresAt },
     };
   }
@@ -158,7 +175,13 @@ export class AuthService {
       return;
     }
 
-    await this.sendResetLink(scope, user._id, user.email, user.name, meta);
+    await this.sendResetLink(
+      scope,
+      user._id,
+      user.email ?? '',
+      user.name,
+      meta,
+    );
   }
 
   async resetPassword(scope: AuthScope, dto: ResetPasswordDto): Promise<void> {
@@ -191,6 +214,98 @@ export class AuthService {
     }
 
     await this.tokensService.revokeAllForSubject(subjectId, scope);
+    this.rolePermissions.invalidateUser(subjectId.toString());
+  }
+
+  async changePassword(
+    subjectId: string,
+    dto: ChangePasswordDto,
+    meta: RequestMeta,
+  ): Promise<AuthSession> {
+    if (!Types.ObjectId.isValid(subjectId)) {
+      throw invalidSession();
+    }
+
+    const user = await this.userModel
+      .findById(subjectId)
+      .select('+passwordHash')
+      .exec();
+
+    if (!user || user.status !== 'active') {
+      throw invalidSession();
+    }
+
+    const tenant = await this.tenantModel.findById(user.tenantId).exec();
+
+    if (tenant?.status === 'suspended') {
+      throw invalidSession();
+    }
+
+    const currentOk = await this.passwordService.verify(
+      user.passwordHash,
+      dto.currentPassword,
+    );
+
+    if (!currentOk) {
+      throw new BadRequestException('Your current password is incorrect.');
+    }
+
+    const reused = await this.passwordService.verify(
+      user.passwordHash,
+      dto.newPassword,
+    );
+
+    if (reused) {
+      throw new BadRequestException(
+        'New password must be different from your current password.',
+      );
+    }
+
+    const passwordHash = await this.passwordService.hash(dto.newPassword);
+
+    await this.userModel
+      .updateOne(
+        { _id: user._id },
+        {
+          $set: {
+            passwordHash,
+            passwordChangedAt: new Date(),
+            failedAttempts: 0,
+            lockedUntil: null,
+          },
+        },
+      )
+      .exec();
+
+    await this.tokensService.revokeAllForSubject(user._id, 'app');
+    this.rolePermissions.invalidateUser(user._id.toString());
+
+    const permissions = await this.rolePermissions.permissionsForRole(
+      user.tenantId,
+      user.role,
+    );
+    const accessToken = await this.tokensService.issueAccessToken(
+      {
+        id: user._id.toString(),
+        role: user.role,
+        tenantId: user.tenantId.toString(),
+      },
+      'app',
+    );
+    const refresh = await this.tokensService.issueRefreshToken(
+      user._id,
+      'app',
+      false,
+      meta,
+    );
+
+    return {
+      session: {
+        accessToken,
+        user: toSessionUser(user, tenant, permissions, false),
+      },
+      refresh,
+    };
   }
 
   private async sendResetLink(
@@ -241,8 +356,17 @@ export class AuthService {
     }
 
     const tenant = await this.tenantModel.findById(user.tenantId).exec();
+    const permissions = await this.rolePermissions.permissionsForRole(
+      user.tenantId,
+      user.role,
+    );
 
-    return toSessionUser(user, tenant);
+    return toSessionUser(
+      user,
+      tenant,
+      permissions,
+      this.isPasswordExpired(user),
+    );
   }
 
   private async loginSchool(
@@ -302,6 +426,10 @@ export class AuthService {
       },
       'app',
     );
+    const permissions = await this.rolePermissions.permissionsForRole(
+      user.tenantId,
+      user.role,
+    );
     const refresh = await this.tokensService.issueRefreshToken(
       user._id,
       'app',
@@ -310,7 +438,15 @@ export class AuthService {
     );
 
     return {
-      session: { accessToken, user: toSessionUser(user, tenant) },
+      session: {
+        accessToken,
+        user: toSessionUser(
+          user,
+          tenant,
+          permissions,
+          this.isPasswordExpired(user),
+        ),
+      },
       refresh,
     };
   }
@@ -435,6 +571,13 @@ export class AuthService {
     }
   }
 
+  private isPasswordExpired(user: UserDocument): boolean {
+    return isPasswordExpired(
+      user.passwordChangedAt,
+      this.configService.getOrThrow<number>('auth.passwordMaxAgeDays'),
+    );
+  }
+
   private async findActiveUser(
     subjectId: string,
   ): Promise<UserDocument | null> {
@@ -465,14 +608,18 @@ export class AuthService {
 function toSessionUser(
   user: UserDocument,
   tenant: TenantDocument | null,
+  permissions: Permission[],
+  passwordExpired: boolean,
 ): SessionUser {
   return {
     id: user._id.toString(),
     name: user.name,
-    email: user.email,
+    email: user.email ?? '',
     role: user.role,
     tenantId: user.tenantId.toString(),
     tenantName: tenant?.name,
+    permissions,
+    passwordExpired,
   };
 }
 

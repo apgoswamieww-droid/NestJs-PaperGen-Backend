@@ -5,10 +5,12 @@ import { MongoMemoryServer } from 'mongodb-memory-server';
 import { Types, type Model } from 'mongoose';
 import request from 'supertest';
 import { PasswordService } from '../src/auth/password.service.js';
+import { RolePermissionsService } from '../src/auth/role-permissions.service.js';
 import {
   MailService,
   type CredentialsDetails,
 } from '../src/mail/mail.service.js';
+import { Role } from '../src/schemas/role.schema.js';
 import { Tenant } from '../src/schemas/tenant.schema.js';
 import { User, type UserDocument } from '../src/schemas/user.schema.js';
 
@@ -25,6 +27,8 @@ let app: INestApplication;
 let mongo: MongoMemoryServer;
 let sendCredentials: ReturnType<typeof vi.fn>;
 let userModel: Model<User>;
+let roleModel: Model<Role>;
+let rolePermissions: RolePermissionsService;
 
 function login(email: string, password: string) {
   return request(app.getHttpServer())
@@ -186,6 +190,8 @@ beforeAll(async () => {
   const tenantModel = app.get<Model<Tenant>>(getModelToken(Tenant.name));
 
   userModel = app.get<Model<User>>(getModelToken(User.name));
+  roleModel = app.get<Model<Role>>(getModelToken(Role.name));
+  rolePermissions = app.get(RolePermissionsService);
 
   const passwordHash = await passwordService.hash(PASSWORD);
 
@@ -698,29 +704,54 @@ describe('School users (e2e)', () => {
 
     it('refuses to strip a tenant of its last active admin', async () => {
       const vice = await findUser(RIVERTON_VICE_EMAIL);
-      const viceToken = await appToken(RIVERTON_VICE_EMAIL, PASSWORD);
       const principal = await findUser(RIVERTON_PRINCIPAL_EMAIL);
+
+      await roleModel.create({
+        tenantId: principal.tenantId,
+        key: 'user_manager',
+        name: 'User manager',
+        nameKey: 'user manager',
+        description: 'Manages school users.',
+        permissions: ['users.view', 'users.manage'],
+        isSystem: false,
+      });
+      rolePermissions.invalidateTenant(principal.tenantId.toString());
+
+      const principalToken = await appToken(RIVERTON_PRINCIPAL_EMAIL, PASSWORD);
+      const manager = await createViaApi(principalToken, {
+        name: 'Riverton User Manager',
+        role: 'user_manager',
+      });
+      const managerToken = await appToken(manager.email, manager.password);
 
       await userModel
         .updateOne({ _id: vice._id }, { $set: { status: 'suspended' } })
         .exec();
+      rolePermissions.invalidateUser(vice._id.toString());
 
       const status = await setUserStatus(
-        viceToken,
+        managerToken,
         principal._id.toString(),
         'suspended',
       ).expect(400);
 
       expect(status.body.message).toContain('At least one active school');
 
-      await patchUser(viceToken, principal._id.toString(), {
+      await patchUser(managerToken, principal._id.toString(), {
         role: 'staff',
       }).expect(400);
-      await deleteUser(viceToken, principal._id.toString()).expect(400);
+      await deleteUser(managerToken, principal._id.toString()).expect(400);
 
       await userModel
         .updateOne({ _id: vice._id }, { $set: { status: 'active' } })
         .exec();
+      await userModel.deleteOne({ _id: manager.id }).exec();
+      await roleModel
+        .deleteOne({ tenantId: principal.tenantId, key: 'user_manager' })
+        .exec();
+      rolePermissions.invalidateUser(vice._id.toString());
+      rolePermissions.invalidateUser(manager.id);
+      rolePermissions.invalidateTenant(principal.tenantId.toString());
     });
   });
 

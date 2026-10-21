@@ -11,14 +11,19 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Types, type Model, type QueryFilter } from 'mongoose';
 import type { AuthIdentity } from '../../auth/auth.types.js';
 import { PasswordService } from '../../auth/password.service.js';
+import { RolePermissionsService } from '../../auth/role-permissions.service.js';
 import { TokensService } from '../../auth/tokens.service.js';
 import type { CredentialsDetails } from '../../mail/mail.service.js';
 import { MailService } from '../../mail/mail.service.js';
 import { PasswordResetToken } from '../../schemas/password-reset-token.schema.js';
+import { Medium } from '../../schemas/medium.schema.js';
 import { RefreshToken } from '../../schemas/refresh-token.schema.js';
+import { Standard } from '../../schemas/standard.schema.js';
+import { Subject } from '../../schemas/subject.schema.js';
 import { Tenant, type TenantDocument } from '../../schemas/tenant.schema.js';
 import {
   User,
+  USER_ROLES,
   type AccountStatus,
   type UserDocument,
   type UserRole,
@@ -26,6 +31,12 @@ import {
 import type { CreateUserDto } from './dto/create-user.dto.js';
 import type { ListUsersQueryDto } from './dto/list-users-query.dto.js';
 import type { UpdateUserDto } from './dto/update-user.dto.js';
+import {
+  buildStudentProfile,
+  loadStudentProfileScope,
+  toStudentProfileRecord,
+  type StudentProfileDocumentValue,
+} from './student-profile.js';
 import type {
   CreateUserResult,
   GeneratedCredentials,
@@ -47,9 +58,13 @@ export class SchoolUsersService {
     private readonly configService: ConfigService,
     private readonly passwordService: PasswordService,
     private readonly tokensService: TokensService,
+    private readonly rolePermissions: RolePermissionsService,
     private readonly mailService: MailService,
     @InjectModel(Tenant.name) private readonly tenantModel: Model<Tenant>,
     @InjectModel(User.name) private readonly userModel: Model<User>,
+    @InjectModel(Subject.name) private readonly subjectModel: Model<Subject>,
+    @InjectModel(Medium.name) private readonly mediumModel: Model<Medium>,
+    @InjectModel(Standard.name) private readonly standardModel: Model<Standard>,
     @InjectModel(RefreshToken.name)
     private readonly refreshTokenModel: Model<RefreshToken>,
     @InjectModel(PasswordResetToken.name)
@@ -70,6 +85,7 @@ export class SchoolUsersService {
     }
 
     if (query.role) {
+      await this.ensureRoleExists(tenantId, query.role);
       filter.role = query.role;
     }
 
@@ -115,7 +131,12 @@ export class SchoolUsersService {
   ): Promise<CreateUserResult> {
     const { tenantId } = this.scope(auth);
 
-    if (await this.userModel.exists({ email: dto.email })) {
+    await this.ensureRoleAssignable(auth, tenantId, dto.role);
+
+    const email =
+      dto.email === undefined || dto.email.trim() === '' ? null : dto.email;
+
+    if (email !== null && (await this.userModel.exists({ email }))) {
       throw new ConflictException('A user with this email already exists.');
     }
 
@@ -125,6 +146,8 @@ export class SchoolUsersService {
       throw new NotFoundException('School not found.');
     }
 
+    const studentProfile = await this.buildProfile(tenantId, dto);
+
     const password = this.passwordService.generate();
 
     let user: UserDocument;
@@ -133,9 +156,10 @@ export class SchoolUsersService {
       user = await this.userModel.create({
         tenantId,
         name: dto.name,
-        email: dto.email,
+        email,
         phone: dto.phone ?? '',
         role: dto.role,
+        studentProfile,
         passwordHash: await this.passwordService.hash(password),
         status: 'active',
         passwordChangedAt: new Date(),
@@ -152,7 +176,7 @@ export class SchoolUsersService {
 
     return {
       user: this.toRecord(user),
-      credentials: { email: user.email, password, sent },
+      credentials: { email: user.email ?? '', password, sent },
     };
   }
 
@@ -169,13 +193,29 @@ export class SchoolUsersService {
         throw new BadRequestException('You cannot change your own role.');
       }
 
+      await this.ensureRoleAssignable(auth, tenantId, dto.role);
       await this.ensureAdminRemains(tenantId, user);
     }
 
-    if (dto.email !== undefined && dto.email !== user.email) {
+    const clearingEmail = dto.email !== undefined && dto.email.trim() === '';
+    const nextEmail =
+      dto.email === undefined
+        ? (user.email ?? null)
+        : clearingEmail
+          ? null
+          : dto.email;
+    const nextRole = dto.role ?? user.role;
+
+    if (nextRole !== 'student' && nextEmail === null) {
+      throw new BadRequestException(
+        'Email is required for non-student accounts.',
+      );
+    }
+
+    if (nextEmail !== null && nextEmail !== user.email) {
       if (
         await this.userModel.exists({
-          email: dto.email,
+          email: nextEmail,
           _id: { $ne: user._id },
         })
       ) {
@@ -190,7 +230,7 @@ export class SchoolUsersService {
     }
 
     if (dto.email !== undefined) {
-      updates['email'] = dto.email;
+      updates['email'] = nextEmail;
     }
 
     if (dto.phone !== undefined) {
@@ -199,6 +239,10 @@ export class SchoolUsersService {
 
     if (dto.role !== undefined) {
       updates['role'] = dto.role;
+    }
+
+    if (dto.studentProfile !== undefined) {
+      updates['studentProfile'] = await this.buildProfile(tenantId, dto);
     }
 
     try {
@@ -213,6 +257,8 @@ export class SchoolUsersService {
       if (!updated) {
         throw new NotFoundException('User not found.');
       }
+
+      this.rolePermissions.invalidateUser(user._id.toString());
 
       return this.toRecord(updated);
     } catch (error) {
@@ -256,6 +302,8 @@ export class SchoolUsersService {
       await this.tokensService.revokeAllForSubject(user._id, 'app');
     }
 
+    this.rolePermissions.invalidateUser(user._id.toString());
+
     return this.toRecord(updated);
   }
 
@@ -288,10 +336,11 @@ export class SchoolUsersService {
       )
       .exec();
     await this.tokensService.revokeAllForSubject(user._id, 'app');
+    this.rolePermissions.invalidateUser(user._id.toString());
 
     const sent = await this.sendCredentials(tenant, user, password);
 
-    return { email: user.email, password, sent };
+    return { email: user.email ?? '', password, sent };
   }
 
   async remove(auth: AuthIdentity, id: string): Promise<void> {
@@ -314,6 +363,7 @@ export class SchoolUsersService {
         .exec(),
     ]);
     await this.userModel.deleteOne({ _id: user._id }).exec();
+    this.rolePermissions.invalidateUser(user._id.toString());
   }
 
   private scope(auth: AuthIdentity): ActorScope {
@@ -368,12 +418,37 @@ export class SchoolUsersService {
     }
   }
 
+  private async ensureRoleExists(
+    tenantId: Types.ObjectId,
+    roleKey: string,
+  ): Promise<void> {
+    const roles = await this.rolePermissions.rolesForTenant(tenantId);
+
+    if (!roles.has(roleKey) && !isBuiltInRole(roleKey)) {
+      throw new BadRequestException('Select a valid role.');
+    }
+  }
+
+  private async ensureRoleAssignable(
+    auth: AuthIdentity,
+    tenantId: Types.ObjectId,
+    roleKey: string,
+  ): Promise<void> {
+    await this.ensureRoleExists(tenantId, roleKey);
+
+    if (roleKey === 'school_admin' && auth.role !== 'school_admin') {
+      throw new BadRequestException(
+        'Only a school admin can assign the School admin role.',
+      );
+    }
+  }
+
   private async buildSummary(
     tenantId: Types.ObjectId,
   ): Promise<SchoolUsersSummary> {
     const rows = await this.userModel
       .aggregate<{
-        _id: { role: UserRole; status: AccountStatus };
+        _id: { role: string; status: AccountStatus };
         count: number;
       }>([
         { $match: { tenantId } },
@@ -396,7 +471,7 @@ export class SchoolUsersService {
       students: 0,
     };
 
-    const roleKeys: Record<UserRole, keyof SchoolUsersSummary> = {
+    const roleKeys: Record<string, keyof SchoolUsersSummary> = {
       school_admin: 'schoolAdmins',
       teacher: 'teachers',
       staff: 'staff',
@@ -414,10 +489,35 @@ export class SchoolUsersService {
 
       const key = roleKeys[row._id.role];
 
-      summary[key] += row.count;
+      if (key) {
+        summary[key] += row.count;
+      }
     }
 
     return summary;
+  }
+
+  private async buildProfile(
+    tenantId: Types.ObjectId,
+    dto: Pick<CreateUserDto | UpdateUserDto, 'studentProfile'>,
+  ): Promise<StudentProfileDocumentValue | null> {
+    if (dto.studentProfile === undefined) {
+      return null;
+    }
+
+    const scope = await loadStudentProfileScope(
+      tenantId,
+      this.subjectModel,
+      this.mediumModel,
+      this.standardModel,
+    );
+    const { value, errors } = buildStudentProfile(dto.studentProfile, scope);
+
+    if (errors.length > 0) {
+      throw new BadRequestException(errors[0]);
+    }
+
+    return value;
   }
 
   private async sendCredentials(
@@ -425,6 +525,10 @@ export class SchoolUsersService {
     user: UserDocument,
     password: string,
   ): Promise<boolean> {
+    if (!user.email) {
+      return false;
+    }
+
     const details: CredentialsDetails = {
       to: user.email,
       name: user.name,
@@ -454,9 +558,10 @@ export class SchoolUsersService {
     return {
       id: user._id.toString(),
       name: user.name,
-      email: user.email,
+      email: user.email ?? '',
       phone: user.phone ?? '',
       role: user.role,
+      studentProfile: toStudentProfileRecord(user.studentProfile),
       status: user.status,
       lastLoginAt: user.lastLoginAt ? user.lastLoginAt.toISOString() : null,
       createdAt: (createdAt ?? new Date()).toISOString(),
@@ -474,4 +579,8 @@ function isDuplicateKeyError(error: unknown): boolean {
     error !== null &&
     (error as { code?: unknown }).code === 11000
   );
+}
+
+function isBuiltInRole(roleKey: string): roleKey is UserRole {
+  return (USER_ROLES as readonly string[]).includes(roleKey);
 }

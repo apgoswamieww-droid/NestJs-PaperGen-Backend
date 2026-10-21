@@ -13,9 +13,9 @@ import {
 } from '@nestjs/common';
 import type { AuthIdentity } from '../../auth/auth.types.js';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator.js';
-import { Roles } from '../../auth/decorators/roles.decorator.js';
+import { RequirePermissions } from '../../auth/decorators/permissions.decorator.js';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
-import { RolesGuard } from '../../auth/guards/roles.guard.js';
+import { PermissionsGuard } from '../../auth/guards/permissions.guard.js';
 import { CreateStandardDto } from './dto/create-standard.dto.js';
 import { ListStandardsQueryDto } from './dto/list-standards-query.dto.js';
 import { UpdateStandardDto } from './dto/update-standard.dto.js';
@@ -23,11 +23,12 @@ import { StandardsService } from './standards.service.js';
 import type { StandardRecord, StandardsPage } from './standards.types.js';
 
 @Controller('standards')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard)
 export class StandardsController {
   constructor(private readonly standardsService: StandardsService) {}
 
   @Get()
+  @RequirePermissions('masters.view')
   list(
     @CurrentUser() auth: AuthIdentity,
     @Query() query: ListStandardsQueryDto,
@@ -36,7 +37,7 @@ export class StandardsController {
   }
 
   @Post()
-  @Roles('school_admin')
+  @RequirePermissions('masters.manage')
   create(
     @CurrentUser() auth: AuthIdentity,
     @Body() dto: CreateStandardDto,
@@ -45,7 +46,7 @@ export class StandardsController {
   }
 
   @Patch(':id')
-  @Roles('school_admin')
+  @RequirePermissions('masters.manage')
   @HttpCode(HttpStatus.OK)
   update(
     @CurrentUser() auth: AuthIdentity,
@@ -56,7 +57,7 @@ export class StandardsController {
   }
 
   @Delete(':id')
-  @Roles('school_admin')
+  @RequirePermissions('masters.manage')
   @HttpCode(HttpStatus.NO_CONTENT)
   remove(
     @CurrentUser() auth: AuthIdentity,
@@ -66,7 +67,7 @@ export class StandardsController {
   }
 
   @Post(':id/restore')
-  @Roles('school_admin')
+  @RequirePermissions('masters.manage')
   @HttpCode(HttpStatus.OK)
   restore(
     @CurrentUser() auth: AuthIdentity,

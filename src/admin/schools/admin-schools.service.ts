@@ -12,6 +12,7 @@ import { Types, type Model } from 'mongoose';
 import type { RequestMeta } from '../../auth/auth.types.js';
 import { PasswordResetService } from '../../auth/password-reset.service.js';
 import { PasswordService } from '../../auth/password.service.js';
+import { RolePermissionsService } from '../../auth/role-permissions.service.js';
 import { TokensService } from '../../auth/tokens.service.js';
 import type {
   PasswordInviteDetails,
@@ -112,6 +113,7 @@ export class AdminSchoolsService {
     private readonly passwordService: PasswordService,
     private readonly passwordResetService: PasswordResetService,
     private readonly tokensService: TokensService,
+    private readonly rolePermissions: RolePermissionsService,
     private readonly mailService: MailService,
     @InjectModel(Tenant.name) private readonly tenantModel: Model<Tenant>,
     @InjectModel(Plan.name) private readonly planModel: Model<Plan>,
@@ -198,6 +200,9 @@ export class AdminSchoolsService {
     const slug = await this.pickSlug(dto.name);
     const tenant = await this.createTenant(dto, slug);
     const user = await this.createSchoolAdmin(tenant._id, dto);
+
+    await this.rolePermissions.ensureSystemRoles(tenant._id);
+
     const invite = await this.issueInvite(tenant, user, meta);
 
     return {
@@ -410,22 +415,30 @@ export class AdminSchoolsService {
       return { kind: 'invite', ...invite };
     }
 
+    const email = user.email;
+
+    if (!email) {
+      throw new BadRequestException(
+        'This admin account does not have an email address.',
+      );
+    }
+
     const { token, expiresInMinutes } = await this.passwordResetService.create(
       'app',
       user._id,
-      user.email,
+      email,
       meta,
     );
     const url = `${this.configService.getOrThrow<string>('mail.appUrl')}/reset-password?token=${encodeURIComponent(token)}`;
     const sent = await this.sendReset({
-      to: user.email,
+      to: email,
       name: user.name,
       url,
       scope: 'app',
       expiresInMinutes,
     });
 
-    return { kind: 'reset', email: user.email, expiresInMinutes, sent };
+    return { kind: 'reset', email, expiresInMinutes, sent };
   }
 
   private async ensurePlan(code: string): Promise<void> {
@@ -473,26 +486,34 @@ export class AdminSchoolsService {
     user: UserDocument,
     meta: RequestMeta,
   ): Promise<ResendInviteResult> {
+    const email = user.email;
+
+    if (!email) {
+      throw new BadRequestException(
+        'This admin account does not have an email address.',
+      );
+    }
+
     const expiresInHours = this.configService.getOrThrow<number>(
       'mail.inviteTtlHours',
     );
     const invite = await this.passwordResetService.create(
       'app',
       user._id,
-      user.email,
+      email,
       meta,
       expiresInHours * 60,
     );
     const url = `${this.configService.getOrThrow<string>('mail.appUrl')}/reset-password?token=${encodeURIComponent(invite.token)}`;
     const sent = await this.sendInvite({
-      to: user.email,
+      to: email,
       name: user.name,
       tenantName: tenant.name,
       url,
       expiresInHours,
     });
 
-    return { email: user.email, expiresInHours, sent };
+    return { email, expiresInHours, sent };
   }
 
   private async pickSlug(name: string): Promise<string> {
@@ -732,7 +753,7 @@ export class AdminSchoolsService {
     return {
       id: user._id.toString(),
       name: user.name,
-      email: user.email,
+      email: user.email ?? '',
       role: user.role,
       status: user.status,
       setupPending: user.passwordChangedAt === null,

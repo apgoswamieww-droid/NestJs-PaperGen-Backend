@@ -13,9 +13,9 @@ import {
 } from '@nestjs/common';
 import type { AuthIdentity } from '../../auth/auth.types.js';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator.js';
-import { Roles } from '../../auth/decorators/roles.decorator.js';
+import { RequirePermissions } from '../../auth/decorators/permissions.decorator.js';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
-import { RolesGuard } from '../../auth/guards/roles.guard.js';
+import { PermissionsGuard } from '../../auth/guards/permissions.guard.js';
 import { CreateMediumDto } from './dto/create-medium.dto.js';
 import { ListMediumsQueryDto } from './dto/list-mediums-query.dto.js';
 import { UpdateMediumDto } from './dto/update-medium.dto.js';
@@ -23,11 +23,12 @@ import { MediumsService } from './mediums.service.js';
 import type { MediumRecord, MediumsPage } from './mediums.types.js';
 
 @Controller('mediums')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard)
 export class MediumsController {
   constructor(private readonly mediumsService: MediumsService) {}
 
   @Get()
+  @RequirePermissions('masters.view')
   list(
     @CurrentUser() auth: AuthIdentity,
     @Query() query: ListMediumsQueryDto,
@@ -36,7 +37,7 @@ export class MediumsController {
   }
 
   @Post()
-  @Roles('school_admin')
+  @RequirePermissions('masters.manage')
   create(
     @CurrentUser() auth: AuthIdentity,
     @Body() dto: CreateMediumDto,
@@ -45,7 +46,7 @@ export class MediumsController {
   }
 
   @Patch(':id')
-  @Roles('school_admin')
+  @RequirePermissions('masters.manage')
   @HttpCode(HttpStatus.OK)
   update(
     @CurrentUser() auth: AuthIdentity,
@@ -56,7 +57,7 @@ export class MediumsController {
   }
 
   @Delete(':id')
-  @Roles('school_admin')
+  @RequirePermissions('masters.manage')
   @HttpCode(HttpStatus.NO_CONTENT)
   remove(
     @CurrentUser() auth: AuthIdentity,
@@ -66,7 +67,7 @@ export class MediumsController {
   }
 
   @Post(':id/restore')
-  @Roles('school_admin')
+  @RequirePermissions('masters.manage')
   @HttpCode(HttpStatus.OK)
   restore(
     @CurrentUser() auth: AuthIdentity,

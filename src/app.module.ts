@@ -8,6 +8,8 @@ import { AdminSchoolsModule } from './admin/schools/admin-schools.module.js';
 import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
 import { AuthModule } from './auth/auth.module.js';
+import { PermissionsModule } from './auth/permissions.module.js';
+import { BloomLevelsModule } from './school/bloom-levels/bloom-levels.module.js';
 import {
   appConfig,
   authConfig,
@@ -16,8 +18,16 @@ import {
 } from './config/configuration.js';
 import { validateEnv } from './config/env.validation.js';
 import { HealthModule } from './health/health.module.js';
+import { ChaptersModule } from './school/chapters/chapters.module.js';
+import { DifficultyLevelsModule } from './school/difficulty-levels/difficulty-levels.module.js';
+import { ExamTypesModule } from './school/exam-types/exam-types.module.js';
 import { MediumsModule } from './school/mediums/mediums.module.js';
+import { QuestionTypesModule } from './school/question-types/question-types.module.js';
+import { QuestionsModule } from './school/questions/questions.module.js';
+import { RolesModule } from './school/roles/roles.module.js';
 import { StandardsModule } from './school/standards/standards.module.js';
+import { SubjectsModule } from './school/subjects/subjects.module.js';
+import { TopicsModule } from './school/topics/topics.module.js';
 import { SchoolUsersModule } from './school/users/school-users.module.js';
 
 @Module({
@@ -51,13 +61,23 @@ import { SchoolUsersModule } from './school/users/school-users.module.js';
       }),
     }),
     HealthModule,
+    PermissionsModule,
     AuthModule,
     AdminAuthModule,
     AdminSchoolsModule,
     AdminPlansModule,
     SchoolUsersModule,
+    RolesModule,
     MediumsModule,
     StandardsModule,
+    SubjectsModule,
+    ChaptersModule,
+    TopicsModule,
+    QuestionTypesModule,
+    QuestionsModule,
+    DifficultyLevelsModule,
+    BloomLevelsModule,
+    ExamTypesModule,
   ],
   controllers: [AppController],
   providers: [AppService],

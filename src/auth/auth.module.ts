@@ -20,12 +20,14 @@ import { AuthController } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
 import { PasswordResetService } from './password-reset.service.js';
 import { PasswordService } from './password.service.js';
+import { PermissionsModule } from './permissions.module.js';
 import { TokensService } from './tokens.service.js';
 
 @Module({
   imports: [
     JwtModule.register({}),
     MailModule,
+    PermissionsModule,
     MongooseModule.forFeature([
       { name: User.name, schema: UserSchema },
       { name: Tenant.name, schema: TenantSchema },

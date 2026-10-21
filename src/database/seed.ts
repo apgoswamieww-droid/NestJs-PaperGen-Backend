@@ -4,6 +4,7 @@ import { getModelToken } from '@nestjs/mongoose';
 import type { Model } from 'mongoose';
 import { AppModule } from '../app.module.js';
 import { PasswordService } from '../auth/password.service.js';
+import { RolePermissionsService } from '../auth/role-permissions.service.js';
 import { PlatformAdmin } from '../schemas/platform-admin.schema.js';
 import { Tenant } from '../schemas/tenant.schema.js';
 import { User } from '../schemas/user.schema.js';
@@ -42,6 +43,23 @@ function accountFromEnv(prefix: string): SeedAccount {
   return account;
 }
 
+async function dropLegacyEmailIndex(
+  userModel: Model<User>,
+  logger: Logger,
+): Promise<void> {
+  const indexes = await userModel.collection.indexes().catch(() => []);
+  const legacy = indexes.some((index) => index.name === 'email_1');
+
+  if (!legacy) {
+    return;
+  }
+
+  await userModel.collection.dropIndex('email_1');
+  logger.log(
+    'Dropped the legacy users.email_1 index; email uniqueness now applies only to non-null emails.',
+  );
+}
+
 async function seed(): Promise<void> {
   const logger = new Logger('Seed');
   const app = await NestFactory.createApplicationContext(AppModule, {
@@ -55,6 +73,9 @@ async function seed(): Promise<void> {
       getModelToken(PlatformAdmin.name),
     );
     const passwordService = app.get(PasswordService);
+    const rolePermissions = app.get(RolePermissionsService);
+
+    await dropLegacyEmailIndex(userModel, logger);
 
     const tenantName = requiredEnv('SEED_TENANT_NAME');
     const tenantSlug = requiredEnv('SEED_TENANT_SLUG').toLowerCase();
@@ -96,6 +117,9 @@ async function seed(): Promise<void> {
     }
 
     logger.log(`Tenant ready: ${tenant._id.toString()} (${tenant.slug})`);
+
+    await rolePermissions.ensureSystemRoles(tenant._id);
+    logger.log('System roles ready: school_admin, teacher, staff, student');
 
     const existingUser = await userModel
       .findOne({ email: schoolAdmin.email })

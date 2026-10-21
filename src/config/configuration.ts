@@ -34,6 +34,7 @@ export const authConfig = registerAs('auth', () => ({
   ).toLowerCase() as CookieSameSite,
   lockoutAttempts: Number(process.env['AUTH_LOCKOUT_ATTEMPTS'] ?? 5),
   lockoutMinutes: Number(process.env['AUTH_LOCKOUT_MINUTES'] ?? 15),
+  passwordMaxAgeDays: Number(process.env['PASSWORD_MAX_AGE_DAYS'] ?? 90),
 }));
 
 export const mailConfig = registerAs('mail', () => ({

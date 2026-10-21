@@ -1,4 +1,5 @@
 import type { Request } from 'express';
+import type { Permission } from './permissions.js';
 
 export const AUTH_SCOPES = ['app', 'admin'] as const;
 
@@ -16,6 +17,7 @@ export interface AuthIdentity {
   id: string;
   role: string;
   tenantId?: string;
+  permissions?: Permission[];
 }
 
 export interface SessionUser {
@@ -25,6 +27,8 @@ export interface SessionUser {
   role: string;
   tenantId?: string;
   tenantName?: string;
+  permissions?: string[];
+  passwordExpired?: boolean;
 }
 
 export interface SessionResponse {

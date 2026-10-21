@@ -3,7 +3,6 @@ import type {
   SubscriptionStatus,
 } from '../../schemas/plan.schema.js';
 import type { TenantStatus, TenantType } from '../../schemas/tenant.schema.js';
-import type { UserRole } from '../../schemas/user.schema.js';
 
 export interface AdminSchoolSummary {
   id: string;
@@ -77,7 +76,7 @@ export interface AdminSchoolUser {
   id: string;
   name: string;
   email: string;
-  role: UserRole;
+  role: string;
   status: string;
   setupPending: boolean;
   lastLoginAt: string | null;

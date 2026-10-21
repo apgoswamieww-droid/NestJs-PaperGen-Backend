@@ -237,7 +237,7 @@ beforeAll(async () => {
     tokenHash: 'seeded-pending-invite-hash',
     subjectId: admin._id,
     subjectType: 'app',
-    email: admin.email,
+    email: admin.email ?? '',
     expiresAt: new Date(Date.now() + 72 * 60 * 60_000),
   });
 

@@ -7,9 +7,11 @@ import type { ConfigService } from '@nestjs/config';
 import type { Reflector } from '@nestjs/core';
 import type { AuthenticatedRequest } from '../auth.types.js';
 import type { TokensService } from '../tokens.service.js';
+import type { RolePermissionsService } from '../role-permissions.service.js';
 import { AdminJwtGuard } from './admin-jwt.guard.js';
 import { JwtAuthGuard } from './jwt-auth.guard.js';
 import { OriginCheckGuard } from './origin-check.guard.js';
+import { PermissionsGuard } from './permissions.guard.js';
 import { RolesGuard } from './roles.guard.js';
 
 function contextFor(request: unknown): ExecutionContext {
@@ -110,6 +112,97 @@ describe('RolesGuard', () => {
     expect(() => guard.canActivate(contextFor(request))).toThrow(
       ForbiddenException,
     );
+  });
+});
+
+describe('PermissionsGuard', () => {
+  function createGuard(
+    required: string[] | undefined,
+    access: Awaited<ReturnType<RolePermissionsService['resolveAccess']>>,
+    request: AuthenticatedRequest = {
+      headers: {},
+      auth: { id: 'user-1', role: 'teacher', tenantId: 'tenant-1' },
+    } as AuthenticatedRequest,
+  ): { guard: PermissionsGuard; request: AuthenticatedRequest } {
+    const reflector = {
+      getAllAndOverride: vi.fn().mockReturnValue(required),
+    };
+    const rolePermissions = {
+      resolveAccess: vi.fn().mockResolvedValue(access),
+    } as unknown as RolePermissionsService;
+
+    return {
+      guard: new PermissionsGuard(
+        reflector as unknown as Reflector,
+        rolePermissions,
+      ),
+      request,
+    };
+  }
+
+  it('allows requests that do not declare permissions', async () => {
+    const { guard, request } = createGuard(undefined, null);
+
+    await expect(guard.canActivate(contextFor(request))).resolves.toBe(true);
+  });
+
+  it('allows access when every required permission is granted', async () => {
+    const { guard, request } = createGuard(['masters.view'], {
+      tenantId: 'tenant-1',
+      role: 'teacher',
+      permissions: ['masters.view'],
+      passwordExpired: false,
+    });
+
+    await expect(guard.canActivate(contextFor(request))).resolves.toBe(true);
+    expect(request.auth?.role).toBe('teacher');
+    expect(request.auth?.permissions).toEqual(['masters.view']);
+  });
+
+  it('rejects access when a permission is missing', async () => {
+    const { guard, request } = createGuard(['masters.manage'], {
+      tenantId: 'tenant-1',
+      role: 'teacher',
+      permissions: ['masters.view'],
+      passwordExpired: false,
+    });
+
+    await expect(guard.canActivate(contextFor(request))).rejects.toThrow(
+      ForbiddenException,
+    );
+  });
+
+  it('rejects access when the account cannot be resolved', async () => {
+    const { guard, request } = createGuard(['masters.view'], null);
+
+    await expect(guard.canActivate(contextFor(request))).rejects.toThrow(
+      ForbiddenException,
+    );
+  });
+
+  it('rejects access while the password is expired', async () => {
+    const { guard, request } = createGuard(['masters.view'], {
+      tenantId: 'tenant-1',
+      role: 'teacher',
+      permissions: ['masters.view'],
+      passwordExpired: true,
+    });
+
+    await expect(guard.canActivate(contextFor(request))).rejects.toThrow(
+      ForbiddenException,
+    );
+  });
+
+  it('lets the current school admin role through', async () => {
+    const { guard, request } = createGuard(['settings.manage'], {
+      tenantId: 'tenant-1',
+      role: 'school_admin',
+      permissions: [],
+      passwordExpired: false,
+    });
+
+    await expect(guard.canActivate(contextFor(request))).resolves.toBe(true);
+    expect(request.auth?.role).toBe('school_admin');
   });
 });
 

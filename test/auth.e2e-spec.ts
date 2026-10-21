@@ -11,6 +11,8 @@ import { User } from '../src/schemas/user.schema.js';
 
 const SCHOOL_EMAIL = 'admin@demo.school';
 const SCHOOL_PASSWORD = 'School@12345';
+const EXPIRED_EMAIL = 'expired@demo.school';
+const EXPIRED_NEW_PASSWORD = 'NewSchool@12345';
 const LOCK_EMAIL = 'lockme@demo.school';
 const WRONG_EMAIL = 'wrong@demo.school';
 const SUSPENDED_EMAIL = 'suspended@demo.school';
@@ -139,6 +141,15 @@ beforeAll(async () => {
       role: 'teacher',
       passwordHash: schoolPasswordHash,
       status: 'suspended',
+    },
+    {
+      tenantId: tenant._id,
+      email: EXPIRED_EMAIL,
+      name: 'Expired Password',
+      role: 'school_admin',
+      passwordHash: schoolPasswordHash,
+      status: 'active',
+      passwordChangedAt: new Date(Date.now() - 100 * 24 * 60 * 60 * 1000),
     },
     {
       tenantId: closedTenant._id,
@@ -351,6 +362,100 @@ describe('School auth (e2e)', () => {
       .get('/api/auth/me')
       .set('Authorization', `Bearer ${admin.body.accessToken as string}`)
       .expect(401);
+  });
+});
+
+describe('Password expiry and change (e2e)', () => {
+  function changePassword(
+    accessToken: string,
+    currentPassword: string,
+    newPassword: string,
+  ) {
+    return request(app.getHttpServer())
+      .post('/api/auth/change-password')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ currentPassword, newPassword });
+  }
+
+  async function accessTokenFor(
+    email: string,
+    password: string,
+  ): Promise<string> {
+    const response = await login(email, password).expect(200);
+
+    return (response.body as { accessToken: string }).accessToken;
+  }
+
+  it('flags an expired password and blocks protected endpoints', async () => {
+    const loginResponse = await login(EXPIRED_EMAIL, SCHOOL_PASSWORD).expect(
+      200,
+    );
+
+    expect(loginResponse.body.user.passwordExpired).toBe(true);
+
+    const token = (loginResponse.body as { accessToken: string }).accessToken;
+    const me = await request(app.getHttpServer())
+      .get('/api/auth/me')
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200);
+
+    expect(me.body.passwordExpired).toBe(true);
+
+    const blocked = await request(app.getHttpServer())
+      .get('/api/users')
+      .set('Authorization', `Bearer ${token}`)
+      .expect(403);
+
+    expect(blocked.body.code).toBe('PASSWORD_EXPIRED');
+  });
+
+  it('requires the current password and rejects reusing it', async () => {
+    const token = await accessTokenFor(EXPIRED_EMAIL, SCHOOL_PASSWORD);
+
+    const wrong = await changePassword(
+      token,
+      'WrongPassword1',
+      EXPIRED_NEW_PASSWORD,
+    ).expect(400);
+
+    expect(wrong.body.message).toBe('Your current password is incorrect.');
+
+    const same = await changePassword(
+      token,
+      SCHOOL_PASSWORD,
+      SCHOOL_PASSWORD,
+    ).expect(400);
+
+    expect(same.body.message).toBe(
+      'New password must be different from your current password.',
+    );
+  });
+
+  it('changes the password, rotates the session and clears the expiry', async () => {
+    const token = await accessTokenFor(EXPIRED_EMAIL, SCHOOL_PASSWORD);
+
+    const changed = await changePassword(
+      token,
+      SCHOOL_PASSWORD,
+      EXPIRED_NEW_PASSWORD,
+    ).expect(200);
+
+    expect(changed.body.user.passwordExpired).toBe(false);
+    expect(refreshCookie(changed, 'pg_rt')).not.toBeNull();
+
+    await request(app.getHttpServer())
+      .get('/api/users')
+      .set('Authorization', `Bearer ${changed.body.accessToken as string}`)
+      .expect(200);
+
+    await login(EXPIRED_EMAIL, SCHOOL_PASSWORD).expect(401);
+    await login(EXPIRED_EMAIL, EXPIRED_NEW_PASSWORD).expect(200);
+  });
+
+  it('does not flag a recently changed password as expired', async () => {
+    const response = await login(SCHOOL_EMAIL, SCHOOL_PASSWORD).expect(200);
+
+    expect(response.body.user.passwordExpired).toBe(false);
   });
 });
 

@@ -3,15 +3,14 @@ import {
   IsIn,
   IsInt,
   IsString,
+  Matches,
   MaxLength,
   Min,
   ValidateIf,
 } from 'class-validator';
 import {
   ACCOUNT_STATUSES,
-  USER_ROLES,
   type AccountStatus,
-  type UserRole,
 } from '../../../schemas/user.schema.js';
 
 export const USER_PAGE_SIZES = [10, 25, 50] as const;
@@ -35,8 +34,9 @@ export class ListUsersQueryDto {
   @ValidateIf(
     (dto: ListUsersQueryDto) => dto.role !== undefined && dto.role !== '',
   )
-  @IsIn(USER_ROLES)
-  role?: UserRole | '';
+  @IsString()
+  @Matches(/^[a-z][a-z0-9_]{1,39}$/, { message: 'role is not valid.' })
+  role?: string;
 
   @ValidateIf(
     (dto: ListUsersQueryDto) => dto.status !== undefined && dto.status !== '',

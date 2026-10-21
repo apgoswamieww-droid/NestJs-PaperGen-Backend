@@ -25,6 +25,7 @@ import {
   type SessionUser,
 } from './auth.types.js';
 import { CurrentUser } from './decorators/current-user.decorator.js';
+import { ChangePasswordDto } from './dto/change-password.dto.js';
 import { ForgotPasswordDto } from './dto/forgot-password.dto.js';
 import { LoginDto } from './dto/login.dto.js';
 import { ResetPasswordDto } from './dto/reset-password.dto.js';
@@ -108,6 +109,32 @@ export class AuthController {
   @HttpCode(HttpStatus.NO_CONTENT)
   resetPassword(@Body() dto: ResetPasswordDto): Promise<void> {
     return this.authService.resetPassword('app', dto);
+  }
+
+  @Post('change-password')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard)
+  async changePassword(
+    @CurrentUser() identity: AuthIdentity,
+    @Body() dto: ChangePasswordDto,
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ): Promise<SessionResponse> {
+    const result = await this.authService.changePassword(
+      identity.id,
+      dto,
+      requestMeta(request),
+    );
+
+    setRefreshCookie(
+      response,
+      'app',
+      result.refresh.token,
+      result.refresh.expiresAt,
+      this.configService,
+    );
+
+    return result.session;
   }
 
   @Post('logout')

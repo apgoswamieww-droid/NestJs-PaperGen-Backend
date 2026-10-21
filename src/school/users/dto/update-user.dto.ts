@@ -1,16 +1,17 @@
-import { Transform } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   IsEmail,
-  IsIn,
   IsString,
   Matches,
   MaxLength,
   MinLength,
   ValidateIf,
+  ValidateNested,
 } from 'class-validator';
-import { USER_ROLES, type UserRole } from '../../../schemas/user.schema.js';
+import { StudentProfileDto } from './student-profile.dto.js';
 
 const PHONE_PATTERN = /^[0-9+()\-\s]{6,20}$/;
+const ROLE_PATTERN = /^[a-z][a-z0-9_]{1,39}$/;
 
 function trimmed({ value }: { value: unknown }): unknown {
   return typeof value === 'string' ? value.trim() : value;
@@ -29,7 +30,9 @@ export class UpdateUserDto {
   name?: string;
 
   @Transform(lowerTrimmed)
-  @ValidateIf((dto: UpdateUserDto) => dto.email !== undefined)
+  @ValidateIf(
+    (dto: UpdateUserDto) => dto.email !== undefined && dto.email !== '',
+  )
   @IsEmail()
   @MaxLength(254)
   email?: string;
@@ -45,6 +48,12 @@ export class UpdateUserDto {
 
   @Transform(trimmed)
   @ValidateIf((dto: UpdateUserDto) => dto.role !== undefined)
-  @IsIn(USER_ROLES)
-  role?: UserRole;
+  @IsString()
+  @Matches(ROLE_PATTERN, { message: 'role is not valid.' })
+  role?: string;
+
+  @ValidateIf((dto: UpdateUserDto) => dto.studentProfile !== undefined)
+  @ValidateNested()
+  @Type(() => StudentProfileDto)
+  studentProfile?: StudentProfileDto;
 }

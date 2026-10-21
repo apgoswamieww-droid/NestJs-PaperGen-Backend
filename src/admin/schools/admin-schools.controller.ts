@@ -16,6 +16,7 @@ import { Roles } from '../../auth/decorators/roles.decorator.js';
 import { AdminJwtGuard } from '../../auth/guards/admin-jwt.guard.js';
 import { RolesGuard } from '../../auth/guards/roles.guard.js';
 import { AdminSchoolsService } from './admin-schools.service.js';
+import { MasterSeedService } from './master-seed.service.js';
 import type {
   AdminSchoolDetailResult,
   AdminSchoolSummary,
@@ -23,6 +24,7 @@ import type {
   ResendInviteResult,
   ResetPasswordSendResult,
 } from './admin-schools.types.js';
+import type { MasterSeedResult } from './master-seed.types.js';
 import { CreateSchoolDto } from './dto/create-school.dto.js';
 import { UpdateSchoolBillingDto } from './dto/update-school-billing.dto.js';
 import { UpdateSchoolStatusDto } from './dto/update-school-status.dto.js';
@@ -32,7 +34,10 @@ import { UpdateSchoolDto } from './dto/update-school.dto.js';
 @UseGuards(AdminJwtGuard, RolesGuard)
 @Roles('super_admin')
 export class AdminSchoolsController {
-  constructor(private readonly adminSchoolsService: AdminSchoolsService) {}
+  constructor(
+    private readonly adminSchoolsService: AdminSchoolsService,
+    private readonly masterSeedService: MasterSeedService,
+  ) {}
 
   @Get()
   list(): Promise<AdminSchoolSummary[]> {
@@ -86,6 +91,12 @@ export class AdminSchoolsController {
     @Req() request: Request,
   ): Promise<ResetPasswordSendResult> {
     return this.adminSchoolsService.resetPassword(id, requestMeta(request));
+  }
+
+  @Post(':id/seed-master-data')
+  @HttpCode(HttpStatus.OK)
+  seedMasterData(@Param('id') id: string): Promise<MasterSeedResult> {
+    return this.masterSeedService.seed(id);
   }
 
   @Patch(':id/status')
